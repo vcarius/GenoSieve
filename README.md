@@ -141,5 +141,4 @@ This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) f
 Developed by **Vinicius Carius de Souza**.
 
 *   **GitHub**: [@vcarius](https://github.com/vcarius)
-*   **LinkedIn**: [@vcarius]([https://www.linkedin.com/](https://www.linkedin.com/in/vinicius-carius-computational-biology/))````
-
+*   **LinkedIn**: [@vcarius]([https://www.linkedin.com/](https://www.linkedin.com/in/vinicius-carius-computational-biology/)````

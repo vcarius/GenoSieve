@@ -1094,6 +1094,7 @@ def main():
     parser.add_argument("--FASTA_ALN", required=True, type=str, help="Sequence aligment file in FASTA format", default=None)
     parser.add_argument("--METADATA", required=True, type=str, help="TSV metadata file that includes required columns " \
                                                                     "name, date, region, and clade", default=None)
+    parser.add_argument("--output", required=False, type=str, help="Outuput file in FASTA format", default="subsampling.fasta")
     parser.add_argument("--dedup", required=False, action="store_true", help="Remove duplicate sequences from subgroups considering the same period, clade, and region. " \
                                                                             "The dedup command will keep the oldest sequence from each subgroup; " \
                                                                             "if the same sequence appears in different periods and countries, it will be retained.")
@@ -1263,5 +1264,16 @@ def main():
 
             FINAL = pd.concat([FINAL, tmp], ignore_index=True)
     
+    output = open(args.output, "w")
+
+    for i in range(len(FINAL)):
+        name = FINAL.loc[i, "name"]
+        clade = FINAL.loc[i, "clade"]
+        region = FINAL.loc[i, "region"]
+        date = FINAL.loc[i, "date"].strftime("%Y-%m-%d")
+        sequence = str(FINAL.loc[i, "sequence"]).replace("-","")
+        output.write(f">{name}|{clade}|{region}|{date}\n{sequence}\n")
+    output.close()
+
 if __name__ == "__main__":
     main()

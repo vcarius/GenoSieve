@@ -436,7 +436,7 @@ def create_TFIDF_groups(list_of_groups: list = None, tfidf_dataframe = None):
 
     list_idx = []
     list_of_groups_tfidf = []
-    for i in range(len(list_of_groups)):
+    for i in tqdm(range(len(list_of_groups))):
         idx, df_tfidf = create_TFIDF_group(names=list_of_groups[i][2]['name'].values, tfidf_dataframe=tfidf_dataframe)
 
         list_idx.append(idx)

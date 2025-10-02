@@ -25,7 +25,7 @@ from numpy.linalg import slogdet
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-import tqdm
+from tqdm import tqdm
 import argparse
 import logging
 
@@ -1105,8 +1105,8 @@ def main():
     parser.add_argument("--use_diversity", required=False, action="store_true", help="It uses diversity score to adjust the weights.")
     parser.add_argument("--beta", required=False, type=float, help="if use_diversity is True uses per-country diversity to boost weights: " \
                         "w_c = (count_c ** alpha) * (1 + beta * div_norm_c)", default=0.2)
-    parser.add_argument("--Kmer_size", required=False, help="", default=6)
-    parser.add_argument("--overlap", required=False, help="", default=3)
+    parser.add_argument("--kmer_size", required=False, type=int, help="", default=6)
+    parser.add_argument("--overlap", required=False, type=int, help="", default=3)
     parser.add_argument("--use_GA", required=False, action="store_true", help="It uses a genetic algorithm to maximize the divergency inner groups.")
     parser.add_argument("--objective_function", required=False, help="The Fitness Function. Defines what the GA is trying to maximize. The options are:" \
                         " `avg` (maximize the average distance), `min` (maximize the minimum distance), or `sumlogdet` (maximize the log-determinant of the similarity matrix).", default="min")

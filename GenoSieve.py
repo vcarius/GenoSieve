@@ -1213,15 +1213,24 @@ def main():
 
         logging.info(f"It was recreated {len(list_of_groups)} groups by date/clades.")
     
+    logging.info("Building TF-IDF vectorizer for sequences...")
+    
     TFIDF_VEC = build_tfidf_vectorizer(kmer_size = args.kmer_size, overlap=args.overlap, fasta_dict=ALN, norm='l2')
     
+    logging.info("TF-IDF vectorizer for sequences was created.")
+    
+    logging.info("Building TF-IDF vectorizer groups")
+    
     list_of_tfidf_idx, list_of_groups_tfidf = create_TFIDF_groups(list_of_groups=list_of_groups, tfidf_dataframe = TFIDF_VEC)
-
+    
+    logging.info("TF-IDF vectorizer groups were created.")
+    
     # Running subsampling
 
     FINAL = pd.DataFrame()
-
-    for i in range(len(list_of_groups)):
+    logging.info("Running subsamplig...")
+    
+    for i in tqdm(range(len(list_of_groups))):
         alloc = allocate_proportional(list_of_groups[i][2], list_of_groups_tfidf[i], target_N=args.target_N,
                                             region_col='region',
                                             alpha=args.alpha,
@@ -1263,9 +1272,11 @@ def main():
             tmp = region_meta_df.loc[indexes]
 
             FINAL = pd.concat([FINAL, tmp], ignore_index=True)
+    logging.info("Subsampling has finished.")    
     
     output = open(args.output, "w")
-
+    
+    logging.info(f"Saving sequences to {args.output} file...")
     for i in range(len(FINAL)):
         name = FINAL.loc[i, "name"]
         clade = FINAL.loc[i, "clade"]
@@ -1274,6 +1285,7 @@ def main():
         sequence = str(FINAL.loc[i, "sequence"]).replace("-","")
         output.write(f">{name}|{clade}|{region}|{date}\n{sequence}\n")
     output.close()
+    logging.info("Sequences were saved.")
 
 if __name__ == "__main__":
     main()

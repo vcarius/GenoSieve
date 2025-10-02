@@ -1,4 +1,4 @@
-````markdown
+```
 # Genomic Subsampler: Intelligent Sequence Downsampling
 
 **Genomic Subsampler (GenoSieve)** is a Python tool for **intelligent subsampling of large genomic sequence datasets**.  
@@ -114,5 +114,6 @@ This project is licensed under the **MIT License** – see the [LICENSE](LICENSE
 Developed by **Vinicius Carius de Souza**.
 
 ```
+
 
 ---

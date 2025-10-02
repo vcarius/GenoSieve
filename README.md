@@ -40,7 +40,7 @@ conda env create -f environment.yml
 
 # Activate environment
 conda activate GenoSieve
-````
+```
 
 ---
 
@@ -117,3 +117,4 @@ Developed by **Vinicius Carius de Souza**.
 
 
 ---
+

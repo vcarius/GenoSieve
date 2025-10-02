@@ -529,7 +529,7 @@ def genetic_select_subset(
 ) -> Dict:
     """
     Genetic algorithm that evolves populations of subsets (lists of k unique indices).
-    Returns dict with best_indices, best_score, history etc.
+    Returns dict with best_indexes, best_score, history etc.
     """
     rng = random.Random(random_state)
     np.random.seed(random_state)
@@ -626,7 +626,7 @@ def genetic_select_subset(
         if verbose and gen % max(1, generations // 10) == 0:
             print(f"gen {gen}/{generations} best={best_score:.6f}")
 
-    return {"best_indices": sorted(best), "best_score": best_score, "history": history}
+    return {"best_indexes": sorted(best), "best_score": best_score, "history": history}
 
 # -----------------------
 # Differential Evolution (continuous vector => top-k by ranking)
@@ -696,8 +696,8 @@ def de_select_subset(
         if verbose and gen % max(1, generations // 10) == 0:
             print(f"DE gen {gen}/{generations} best={best_score:.6f}")
 
-    best_indices = np.argsort(-best_v)[:k].tolist()
-    return {"best_indices": sorted(best_indices), "best_score": best_score, "history": history}
+    best_indexes = np.argsort(-best_v)[:k].tolist()
+    return {"best_indexes": sorted(best_indexes), "best_score": best_score, "history": history}
 
 # -----------------------
 # high-level wrapper
@@ -725,9 +725,9 @@ def maximize_diversity_indices(
         raise ValueError("method must be 'ga' or 'de'")
     # attach original ids if X was DataFrame
     if isinstance(X, pd.DataFrame):
-        res["best_ids"] = [idx[i] for i in res["best_indices"]]
+        res["best_ids"] = [idx[i] for i in res["best_indexes"]]
     else:
-        res["best_ids"] = res["best_indices"]
+        res["best_ids"] = res["best_indexes"]
     return res
 
 def dedup_by_region_sequence_keep_oldest(meta_df,
@@ -1238,9 +1238,9 @@ def main():
                                             use_diversity=args.use_diversity,
                                             beta=args.beta)
 
-        print("Allocated by region:", alloc)
+        #print("Allocated by region:", alloc)
         # soma deve ser target_N (ou menor se target_N >= total)
-        print("Allocated sum:", sum(alloc.values()))
+        #print("Allocated sum:", sum(alloc.values()))
 
         meta_by_region, tfidf_by_region = split_tfidf_by_region(list_of_groups[i][2], list_of_groups_tfidf[i], region_col='region')
 
@@ -1262,16 +1262,17 @@ def main():
                                             elitism=args.elitism,
                                             mutation_rate=args.mutation_rate,
                                             random_state=args.random_seed,
-                                            verbose=args.verbose,
+                                            verbose=False, #args.verbose,
                                             crossover_rate=args.crossover_rate
                                                 )
             else:
                 indexes = run_hybrid_sampling(alloc_values=alloc[key], metadata_subgroup=region_meta_df)
-            print(indexes)
+            #print(indexes)
 
             tmp = region_meta_df.loc[indexes]
 
             FINAL = pd.concat([FINAL, tmp], ignore_index=True)
+    
     logging.info("Subsampling has finished.")    
     
     output = open(args.output, "w")

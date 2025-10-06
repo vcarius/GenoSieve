@@ -1217,30 +1217,6 @@ def main():
     logging.info("Building TF-IDF representations for each group...")
     _, list_of_groups_tfidf = create_TFIDF_groups(list_of_groups=list_of_groups, tfidf_dataframe=TFIDF_VEC)
     
-    # --- Lógica de Alocação ---
-    '''
-    group_targets = {}
-    
-    if args.maintain_clade_proportions:
-        logging.info("Allocation Strategy: Maintaining strict original clade proportions.")
-        clade_proportions = METADATA['clade'].value_counts(normalize=True)
-        
-        # Itera sobre cada período de tempo único
-        unique_dates = sorted(list(set(d for d, _, _ in list_of_groups)))
-        for date_period in unique_dates:
-            clade_targets_per_period = (clade_proportions * args.target_N).round().astype(int)
-            diff = args.target_N - clade_targets_per_period.sum()
-            if diff != 0 and not clade_proportions.empty:
-                clade_targets_per_period[clade_proportions.idxmax()] += diff
-            
-            for clade, target in clade_targets_per_period.items():
-                group_targets[(date_period, clade)] = target
-    else:
-        logging.info("Allocation Strategy: Using proportional allocation with smoothing (default).")
-        for group_date, group_clade, _ in list_of_groups:
-            group_targets[(group_date, group_clade)] = args.target_N
-    '''
-
     # --- Execução do Subsampling ---
     FINAL = pd.DataFrame()
     logging.info("Running subsampling across all groups...")

@@ -325,6 +325,7 @@ def build_tfidf_vectorizer(
 
 def create_group_by(
     df: pd.DataFrame,
+    Target_N: int = 100,
     date_col: str = "date",
     clade_col: str = "clade",
     date_freq: Optional[str] = "D",   # 'D' day, 'M' month, 'Y' year, 'Q' quarter, 'W' week, or None
@@ -410,17 +411,26 @@ def create_group_by(
     list_out: List[Tuple[pd.Timestamp, str, pd.DataFrame]] = []
 
     for date_period, df_date in df2.groupby("_date_period"):
+        
+        clade_counts = df_date['clade'].value_counts()
+        #print(N_clades)
+        N_clades = len(clade_counts)
+        W = clade_counts/len(df_date)
+        #print(f"valor: {W}")
+        clade_alloc = (W * (Target_N - N_clades)).round() + 1
+
         inner: Dict[str, pd.DataFrame] = OrderedDict() if return_ordered else {}
+
         for clade_val, df_clade in df_date.groupby(clade_col):
             if len(df_clade) < min_group_size:
                 continue
             df_slice = df_clade.drop(columns=["_date_period"])
             df_slice.reset_index(inplace=True, drop=True)
             inner[clade_val] = df_slice
-            list_out.append((date_period, clade_val, df_slice))
+            list_out.append((date_period, clade_val, df_slice, clade_alloc[clade_val]))
         if inner:
             nested[date_period] = inner
-
+    
     return nested, list_out
 
 def create_TFIDF_groups(list_of_groups: list = None, tfidf_dataframe = None):
@@ -1091,202 +1101,215 @@ def main():
     parser = argparse.ArgumentParser(description="GenoSieve: A subsampling tool designed to maximize diversity while preserving representativeness. " \
     "Developed by Vinicius Carius de Souza.", \
                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--FASTA_ALN", required=True, type=str, help="Sequence aligment file in FASTA format", default=None)
-    parser.add_argument("--METADATA", required=True, type=str, help="TSV metadata file that includes required columns " \
-                                                                    "name, date, region, and clade", default=None)
-    parser.add_argument("--output", required=False, type=str, help="Outuput file in FASTA format", default="subsampling.fasta")
-    parser.add_argument("--dedup", required=False, action="store_true", help="Remove duplicate sequences from subgroups considering the same period, clade, and region. " \
-                                                                            "The dedup command will keep the oldest sequence from each subgroup; " \
-                                                                            "if the same sequence appears in different periods and countries, it will be retained.")
-    parser.add_argument("--date_freq", required=False, type=str, help="Frequency to group sequences.", default="M")
-    parser.add_argument("--target_N", required=True, type=int, help="Number of samples to allocate per period", default=None)
-    parser.add_argument("--alpha", required=False, type=float, help="exponent to smooth proportionality. Recomended values from 0 up to 1.", default=0.5)
-    parser.add_argument("--preserve_max_share", required=False, type=float, help="fraction of `target_N` that can be consumed by the `1 per country` guarantee.", default=0.8)
-    parser.add_argument("--use_diversity", required=False, action="store_true", help="It uses diversity score to adjust the weights.")
-    parser.add_argument("--beta", required=False, type=float, help="if use_diversity is True uses per-country diversity to boost weights: " \
-                        "w_c = (count_c ** alpha) * (1 + beta * div_norm_c)", default=0.2)
-    parser.add_argument("--kmer_size", required=False, type=int, help="", default=6)
-    parser.add_argument("--overlap", required=False, type=int, help="", default=3)
-    parser.add_argument("--use_GA", required=False, action="store_true", help="It uses a genetic algorithm to maximize the divergency inner groups.")
-    parser.add_argument("--objective_function", required=False, help="The Fitness Function. Defines what the GA is trying to maximize. The options are:" \
-                        " `avg` (maximize the average distance), `min` (maximize the minimum distance), or `sumlogdet` (maximize the log-determinant of the similarity matrix).", default="min")
-    parser.add_argument("--min_pop", required=False, type=int, help="The minimum population size. The minimum of `individuals` (candidate solutions/subsets) in each generation." \
-                        " A larger population explores more, but is slower.", default=10)
-    parser.add_argument("--max_pop", required=False, type=int, help="The maximum population size. The maximum of `individuals` (candidate solutions/subsets) in each generation." \
-                        " As said to `min_pop`, a larger population explores more, but is slower.", default=2000)
-    parser.add_argument("--generations", required=False, type=int, help="Number of Generations. The number of evolution cycles (selection, crossover, mutation) the GA will perform." \
-                        " More generations give more time to find a good solution, but increase the execution time.", default=200)
-    parser.add_argument("--mutation_rate", required=False, type=float, help="The probability that an `individual` undergoes a random change " \
-                        "(in its code, a mutation, where a sequence is exchanged for one that is not in the subset)." \
-                        " The mutation introduces new diversity and prevents the GA from becoming stuck.", default=0.25)   
-    parser.add_argument("--crossover_rate", required=False, type=float, help="The probability that two selected `parents` will combine to create `offspring.`" \
-                        " A rate of 0.9 means that 90%% of the time they will recombine, and 10%% of the time they will simply be cloned.", default=0.9)
-    parser.add_argument("--tournament_size", required=False, type=int, help="Controls the selection method. A group of three individuals is randomly selected from the population, and the best of this small group is selected as the `parent.`" \
-                        " This gives less fit individuals a chance to reproduce, maintaining diversity.", default=3)
-    parser.add_argument("--elitism", required=False, type=int, help="The number of the best individuals from the current generation that are copied directly into the next generation, without crossover or mutation." \
-                        " This ensures that the best solution found so far is never lost.", default=2)
-    parser.add_argument("--precompute_metric", required=False, type=str, help="It defines the distance metric that will be used to construct the distance matrix D from its TF-IDF vector representation of the sequences. " \
-                        "It can be used: `cityblock`, `cosine`, `euclidean`, `manhattan`, or `nan_euclidean`.", default="cosine")
-    parser.add_argument("--reduce_dim_before_distance", required=False, type=int, help="It is the target dimension to reduce the dataset dimensionality. The script will run TruncatedSVD method to reduce before computing distances, attempting to provide better performance.", default=None)
-    parser.add_argument("--random_seed", required=False, type=int, help="A number used to initialize the random number generator." \
-                        " Using the same random_state ensures that the algorithm run is reproducible, that is, it will produce exactly the same result every time.", default=1991)
-    parser.add_argument("--verbose", required=False, action="store_true", help="Verbose mode. If set to True, the function will print the optimization progress, which is useful for monitoring long runs.")
+    # --- Definições de Argumentos ---
+    parser.add_argument("--FASTA_ALN", required=True, type=str, help="Sequence aligment file in FASTA format")
+    parser.add_argument("--METADATA", required=True, type=str, help="TSV metadata file that includes required columns 'name', 'date', 'region', and 'clade'")
+    parser.add_argument("--output", required=False, type=str, help="Output file in FASTA format", default="subsampling.fasta")
+    parser.add_argument("--keep_header", required=False, action="store_true", help="It will keep the fasta header as the same.")
+    # Grupo de argumentos para a estratégia de subsampling
+    sampling_group = parser.add_argument_group('Sampling Strategy')
+    sampling_group.add_argument("--dedup", required=False, action="store_true", help="Remove duplicate sequences from subgroups considering the same period, clade, and region. " \
+                                                                            "The dedup command will keep the oldest sequence from each subgroup.")
+    sampling_group.add_argument("--date_freq", required=False, type=str, help="Frequency to group sequences by time.", default="M")
+    sampling_group.add_argument("--target_N", required=True, type=int, help="Number of samples to allocate PER time period (defined by --date_freq).")
+    #sampling_group.add_argument("--maintain_clade_proportions", required=False, action="store_true", help="If set, target_N is distributed among clades to strictly maintain original proportions. " \
+    #                                                                                                    "Default behavior smooths proportions to better represent smaller clades.")
+    
+    # Grupo de argumentos para a alocação
+    allocation_group = parser.add_argument_group('Allocation Parameters')
+    allocation_group.add_argument("--alpha", required=False, type=float, help="Exponent to smooth proportionality (0.0 to 1.0). Lower values give more weight to smaller groups.", default=0.5)
+    allocation_group.add_argument("--preserve_max_share", required=False, type=float, help="Fraction of target_N that can be consumed by the '1 per region' guarantee.", default=0.8)
+    allocation_group.add_argument("--use_diversity", required=False, action="store_true", help="Use genetic diversity score to adjust allocation weights.")
+    allocation_group.add_argument("--beta", required=False, type=float, help="Weight for the diversity score if --use_diversity is active.", default=0.2)
+
+    # Grupo de argumentos para a vetorização
+    vectorizer_group = parser.add_argument_group('Vectorizer Parameters')
+    vectorizer_group.add_argument("--kmer_size", required=False, type=int, help="K-mer size for TF-IDF vectorization.", default=6)
+    vectorizer_group.add_argument("--overlap", required=False, type=int, help="Overlap between k-mers.", default=3)
+
+    # Grupo de argumentos para o Algoritmo Genético
+    ga_group = parser.add_argument_group('Genetic Algorithm Parameters')
+    ga_group.add_argument("--use_GA", required=False, action="store_true", help="Use a genetic algorithm to maximize diversity within groups. Default is Hybrid Sampling.")
+    ga_group.add_argument("--objective_function", required=False, choices=['avg', 'min', 'sumlogdet'], help="Fitness function for the GA to maximize.", default="min")
+    ga_group.add_argument("--min_pop", required=False, type=int, help="Minimum population size for the GA.", default=10)
+    ga_group.add_argument("--max_pop", required=False, type=int, help="Maximum population size for the GA.", default=2000)
+    ga_group.add_argument("--generations", required=False, type=int, help="Number of generations for the GA.", default=200)
+    ga_group.add_argument("--mutation_rate", required=False, type=float, help="Probability of mutation in the GA.", default=0.25)   
+    ga_group.add_argument("--crossover_rate", required=False, type=float, help="Probability of crossover in the GA.", default=0.9)
+    ga_group.add_argument("--tournament_size", required=False, type=int, help="Tournament size for selection in the GA.", default=3)
+    ga_group.add_argument("--elitism", required=False, type=int, help="Number of elite individuals to carry to the next generation.", default=2)
+
+    # Grupo de argumentos para o cálculo da distância
+    distance_group = parser.add_argument_group('Distance Calculation Parameters')
+    distance_group.add_argument("--precompute_metric", required=False, type=str, help="Distance metric for TF-IDF vectors (e.g., 'cosine', 'euclidean').", default="cosine")
+    distance_group.add_argument("--reduce_dim_before_distance", required=False, type=int, help="Target dimension for TruncatedSVD before distance calculation.", default=None)
+    
+    # Grupo de argumentos de controle
+    control_group = parser.add_argument_group('Control Parameters')
+    control_group.add_argument("--random_seed", required=False, type=int, help="Seed for random number generators to ensure reproducibility.", default=1991)
+    control_group.add_argument("--verbose", required=False, action="store_true", help="Enable verbose logging output to console and file.")
 
     args = parser.parse_args()
-    print(args)
 
-    log_level = logging.DEBUG if args.verbose else logging.WARNING
-
+    # --- Configuração do Logging ---
+    log_level = logging.INFO if args.verbose else logging.WARNING
     logging.basicConfig(level=log_level,
                         format='%(asctime)s - %(levelname)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S',
                         handlers=[
-                            logging.FileHandler("running.log", mode='w'), # Salva no arquivo
-                            logging.StreamHandler() # Exibe no console
+                            logging.FileHandler("GenoSieve_running.log", mode='w'),
+                            logging.StreamHandler()
                         ])
     
+    logging.info("GenoSieve Subsampling Tool Started")
     logging.info("Command line arguments:")
     for arg, value in sorted(vars(args).items()):
         logging.info(f"  - {arg}: {value}")
     
-    logging.info(f"Reading metadata from {args.METADATA}...")
-
-    METADATA = READ_METADATA(args.METADATA)
-
-    logging.info(f"Reading sequences from {args.METADATA}...")
-
-    ALN = READ_FASTA(fasta_file=args.FASTA_ALN)
-
-    # Concatening Metadata and Sequences
-    logging.info("Merging metadata and sequences...")
-    
-    METADATA['sequence']=None
-    for idx, name in tqdm(enumerate(METADATA.name), total=len(METADATA.name), desc="Processing METADATA and SEQUENCES to merge them ..."):
-        if name in ALN:
-            METADATA.loc[idx, 'sequence'] = ALN[name]
-
-    NONE_SEQ = METADATA.loc[METADATA['sequence'].isna(), 'name'].tolist()
-    
-    if NONE_SEQ:
+    if args.dedup and not args.use_GA:
         logging.warning(
-            "It was observed that the sequences in the following list don't exist in the "
-            f"fasta file {args.FASTA_ALN}: \n{NONE_SEQ}"
+            "Using --dedup without --use_GA is not recommended for phylodynamic analysis, "
+            "as it removes frequency signals before the hybrid sampling is applied."
         )
 
+    # --- Carregamento e Preparação dos Dados ---
+    logging.info(f"Reading metadata from {args.METADATA}...")
+    METADATA = READ_METADATA(args.METADATA)
+    logging.info(f"Reading sequences from {args.FASTA_ALN}...")
+    ALN = READ_FASTA(fasta_file=args.FASTA_ALN)
+
+    logging.info("Merging metadata and sequences...")
+    METADATA['sequence'] = METADATA['name'].map(ALN)
+    
+    initial_count = len(METADATA)
     METADATA.dropna(subset=["sequence"], inplace=True)
     METADATA.reset_index(inplace=True, drop=True)
-
-    logging.info(f"Total of sample after merge process: {len(METADATA)}.")
-
-    # Creating groups by date (monthly by default) and clade
     
-    logging.info(f"Creating groups by date (frequency: {args.date_freq}) and clades...")
-    
-    nested, list_of_groups = create_group_by(METADATA, date_col='date', clade_col='clade', date_freq=args.date_freq)
+    logging.info(f"Initial sample count: {initial_count}. After removing samples not in FASTA: {len(METADATA)}.")
 
-    logging.info(f"It was created {len(list_of_groups)} groups by date/clades.")
+    # --- Agrupamento e Deduplicação (se solicitado) ---
+    logging.info(f"Creating initial groups by date (frequency: {args.date_freq}) and clade...")
+    _, list_of_groups = create_group_by(METADATA, date_col='date', clade_col='clade', date_freq=args.date_freq)
+    logging.info(f"Created {len(list_of_groups)} initial groups.")
 
     if args.dedup:
         logging.info("Removing duplicated sequences by region for each group...")
-        
         total_before = len(METADATA)
-
-        TMP = pd.DataFrame()
-        for i in tqdm(range(len(list_of_groups))):
-
-            meta_clean, dropped = dedup_by_region_sequence_keep_oldest(list_of_groups[i][2],
-                                                                            seq_col='sequence', date_col='date')
-            #print("Removed rows (original indices):", dropped)
-            TMP = pd.concat([TMP, meta_clean], ignore_index=True)
         
-        METADATA_COPY = METADATA.copy()
-        METADATA = TMP
-
+        # O processo de dedup junta os dataframes dos grupos, então precisamos de um novo METADATA
+        TMP_list = []
+        for _, _, group_df in tqdm(list_of_groups, desc="Deduplicating groups"):
+            meta_clean, _ = dedup_by_region_sequence_keep_oldest(group_df, seq_col='sequence', date_col='date')
+            TMP_list.append(meta_clean)
+        
+        METADATA = pd.concat(TMP_list, ignore_index=True)
         METADATA.reset_index(inplace=True, drop=True)
+        logging.info(f"Deduplication finished. Count before: {total_before}, after: {len(METADATA)}.")
+        
+        logging.info("Recreating groups after deduplication...")
+        _, list_of_groups = create_group_by(METADATA, Target_N=args.target_N, date_col='date', clade_col='clade', date_freq=args.date_freq)
+        logging.info(f"Recreated {len(list_of_groups)} groups.")
 
-        logging.info(f"Deduplication finished. Total of samples before: {total_before}, after: {len(METADATA)}.")
+    # --- Vetorização TF-IDF ---
+    logging.info("Building TF-IDF vectorizer for all sequences...")
+    # Usamos o dicionário ALN original para construir o vetorizador para garantir consistência
+    TFIDF_VEC = build_tfidf_vectorizer(kmer_size=args.kmer_size, overlap=args.overlap, fasta_dict=ALN, norm='l2')
+    logging.info("Building TF-IDF representations for each group...")
+    _, list_of_groups_tfidf = create_TFIDF_groups(list_of_groups=list_of_groups, tfidf_dataframe=TFIDF_VEC)
+    
+    # --- Lógica de Alocação ---
+    '''
+    group_targets = {}
+    
+    if args.maintain_clade_proportions:
+        logging.info("Allocation Strategy: Maintaining strict original clade proportions.")
+        clade_proportions = METADATA['clade'].value_counts(normalize=True)
+        
+        # Itera sobre cada período de tempo único
+        unique_dates = sorted(list(set(d for d, _, _ in list_of_groups)))
+        for date_period in unique_dates:
+            clade_targets_per_period = (clade_proportions * args.target_N).round().astype(int)
+            diff = args.target_N - clade_targets_per_period.sum()
+            if diff != 0 and not clade_proportions.empty:
+                clade_targets_per_period[clade_proportions.idxmax()] += diff
+            
+            for clade, target in clade_targets_per_period.items():
+                group_targets[(date_period, clade)] = target
+    else:
+        logging.info("Allocation Strategy: Using proportional allocation with smoothing (default).")
+        for group_date, group_clade, _ in list_of_groups:
+            group_targets[(group_date, group_clade)] = args.target_N
+    '''
 
-        # Recreating groups by date (monthly) and clade
-        logging.info(f"Recreating groups by date (frequency: {args.date_freq}) and clades after deduplication...")
-
-        nested, list_of_groups = create_group_by(METADATA, date_col='date', clade_col='clade', date_freq=args.date_freq)
-
-        logging.info(f"It was recreated {len(list_of_groups)} groups by date/clades.")
-    
-    logging.info("Building TF-IDF vectorizer for sequences...")
-    
-    TFIDF_VEC = build_tfidf_vectorizer(kmer_size = args.kmer_size, overlap=args.overlap, fasta_dict=ALN, norm='l2')
-    
-    logging.info("TF-IDF vectorizer for sequences was created.")
-    
-    logging.info("Building TF-IDF vectorizer groups")
-    
-    list_of_tfidf_idx, list_of_groups_tfidf = create_TFIDF_groups(list_of_groups=list_of_groups, tfidf_dataframe = TFIDF_VEC)
-    
-    logging.info("TF-IDF vectorizer groups were created.")
-    
-    # Running subsampling
-
+    # --- Execução do Subsampling ---
     FINAL = pd.DataFrame()
-    logging.info("Running subsamplig...")
+    logging.info("Running subsampling across all groups...")
     
-    for i in tqdm(range(len(list_of_groups))):
-        alloc = allocate_proportional(list_of_groups[i][2], list_of_groups_tfidf[i], target_N=args.target_N,
+    for i in tqdm(range(len(list_of_groups)), desc="Subsampling groups"):
+        group_date, group_clade, group_df, group_alloc = list_of_groups[i]
+        
+        if group_alloc == 0 or len(group_df) == 0:
+            continue
+            
+        alloc = allocate_proportional(group_df, list_of_groups_tfidf[i], target_N=int(group_alloc),
                                             region_col='region',
                                             alpha=args.alpha,
                                             preserve_max_share=args.preserve_max_share,
                                             use_diversity=args.use_diversity,
                                             beta=args.beta)
 
-        #print("Allocated by region:", alloc)
-        # soma deve ser target_N (ou menor se target_N >= total)
-        #print("Allocated sum:", sum(alloc.values()))
-
-        meta_by_region, tfidf_by_region = split_tfidf_by_region(list_of_groups[i][2], list_of_groups_tfidf[i], region_col='region')
-
-        # opcional: criar uma lista de dataframes (region, df) para iterar
-        list_region_tfidf_dfs = {c: tfidf_by_region[c] for c in sorted(tfidf_by_region.keys())}
-        list_region_meta_dfs = {c: meta_by_region[c] for c in sorted(meta_by_region.keys())}
-
-        for key in list_region_tfidf_dfs.keys():
-            region_tfidf_df = list_region_tfidf_dfs[key]
-            region_meta_df = list_region_meta_dfs[key]
+        meta_by_region, tfidf_by_region = split_tfidf_by_region(group_df, list_of_groups_tfidf[i], region_col='region')
+        
+        for region, region_meta_df in meta_by_region.items():
+            region_alloc = alloc.get(region, 0)
+            if region_alloc == 0:
+                continue
             
             if args.use_GA:
-
-                indexes = run_filter_sequences(alloc_values=alloc[key], tfidf_dataframe=region_tfidf_df,
-                                            min_pop=args.min_pop, max_pop=args.max_pop, precompute_metric=args.precompute_metric,
+                region_tfidf_df = tfidf_by_region[region]
+                indexes = run_filter_sequences(alloc_values=int(region_alloc), tfidf_dataframe=region_tfidf_df,
+                                            min_pop=args.min_pop, max_pop=args.max_pop, 
+                                            precompute_metric=args.precompute_metric,
                                             reduce_dim_before_distance=args.reduce_dim_before_distance,
                                             generations=args.generations,
                                             tournament_size=args.tournament_size,
                                             elitism=args.elitism,
                                             mutation_rate=args.mutation_rate,
                                             random_state=args.random_seed,
-                                            verbose=False, #args.verbose,
-                                            crossover_rate=args.crossover_rate
-                                                )
+                                            verbose=False,
+                                            crossover_rate=args.crossover_rate)
             else:
-                indexes = run_hybrid_sampling(alloc_values=alloc[key], metadata_subgroup=region_meta_df)
-            #print(indexes)
-
+                indexes = run_hybrid_sampling(alloc_values=int(region_alloc), metadata_subgroup=region_meta_df)
+            
             tmp = region_meta_df.loc[indexes]
-
             FINAL = pd.concat([FINAL, tmp], ignore_index=True)
     
     logging.info("Subsampling has finished.")    
+    logging.info(f"Total sequences in final dataset: {len(FINAL)}")
     
-    output = open(args.output, "w")
+    # --- Salvando o Resultado ---
+    logging.info(f"Saving selected sequences to {args.output}...")
+    with open(args.output, "w") as output_file:
+        for _, row in FINAL.iterrows():
+            name = row["name"]
+            sequence = str(row["sequence"]).replace("-","")
+
+            if args.keep_header:
+            
+                output_file.write(f">{name}\n{sequence}\n")    
+            
+            else:
+            
+                clade = row["clade"]
+                region = row["region"]
+                date = row["date"].strftime("%Y-%m-%d")
+                output_file.write(f">{name}|{clade}|{region}|{date}\n{sequence}\n")
     
-    logging.info(f"Saving sequences to {args.output} file...")
-    for i in range(len(FINAL)):
-        name = FINAL.loc[i, "name"]
-        clade = FINAL.loc[i, "clade"]
-        region = FINAL.loc[i, "region"]
-        date = FINAL.loc[i, "date"].strftime("%Y-%m-%d")
-        sequence = str(FINAL.loc[i, "sequence"]).replace("-","")
-        output.write(f">{name}|{clade}|{region}|{date}\n{sequence}\n")
-    output.close()
-    logging.info("Sequences were saved.")
+    logging.info("Saving final FINAL_DATASET.tsv...")
+    
+    FINAL.to_csv("FINAL_DATASET.tsv", sep="\t", index=False)
+
+    logging.info("GenoSieve run completed successfully.")
 
 if __name__ == "__main__":
     main()

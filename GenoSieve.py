@@ -3,6 +3,8 @@ import math
 from math import comb
 import random
 
+import json
+
 import pandas as pd 
 import numpy as np
 from Bio import SeqIO
@@ -18,16 +20,159 @@ from collections import OrderedDict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics import pairwise_distances
-from sklearn.preprocessing import normalize
-from scipy import sparse
+
 from numpy.linalg import slogdet
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib import colormaps
 
 from tqdm import tqdm
 import argparse
 import logging
+
+
+def save_dict2json(Dict: object = None, filename: str = None):
+        
+    def _make_jsonable(obj):
+        # pandas Series -> dict
+        if pd is not None and isinstance(obj, pd.Series):
+            obj = obj.to_dict()
+
+        # pandas DataFrame -> dict(index_str -> {col_str: val})
+        if pd is not None and isinstance(obj, pd.DataFrame):
+            return {str(idx): {str(col): _make_jsonable(obj.at[idx, col]) for col in obj.columns} for idx in obj.index}
+
+        # dict: convert keys to str (safe) and values recursively
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                # force key to string (Period, Timestamp, custom objects, etc.)
+                # JSON only accepts str,int,float,bool,None as keys; to be safe, use str(key)
+                key_str = k if isinstance(k, (str, int, float, bool, type(None))) else str(k)
+                out[str(key_str)] = _make_jsonable(v)
+            return out
+
+        # sequences -> list
+        if isinstance(obj, (list, tuple, set)):
+            return [_make_jsonable(x) for x in obj]
+
+        # numpy scalars / arrays
+        if np is not None:
+            if isinstance(obj, (np.integer,)):
+                return int(obj)
+            if isinstance(obj, (np.floating,)):
+                f = float(obj)
+                return None if (math.isnan(f) or math.isinf(f)) else f
+            if isinstance(obj, (np.bool_,)):
+                return bool(obj)
+            if isinstance(obj, np.ndarray):
+                return [_make_jsonable(x) for x in obj.tolist()]
+
+        # pandas / numpy NA
+        try:
+            if pd is not None and pd.isna(obj):
+                return None
+        except Exception:
+            pass
+
+        # pandas Period / Timestamp / Timedelta -> str
+        if pd is not None and isinstance(obj, (pd.Period, pd.Timestamp, pd.Timedelta)):
+            return str(obj)
+
+        # datetime -> ISO string
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+
+        # primitive Python types (with NaN/Inf guard for float)
+        if isinstance(obj, float):
+            return None if (math.isnan(obj) or math.isinf(obj)) else obj
+        if isinstance(obj, (int, str, bool)) or obj is None:
+            return obj
+
+        # fallback: stringify
+        return str(obj)
+
+    serializable = _make_jsonable(Dict)
+
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(serializable, f, indent=4, ensure_ascii=False)
+
+def error_calculate(df1: pd.DataFrame = None, df2: pd.DataFrame = None):
+    
+    all_index = df1.index.union(df2.index)
+    all_cols = df1.columns.union(df2.columns)
+    df1 = df1.reindex(index=all_index, columns=all_cols, fill_value=0.0)
+    df2 = df2.reindex(index=all_index, columns=all_cols, fill_value=0.0)
+    df1 = df1.fillna(0)
+    df2 = df2.fillna(0)
+
+    diff = (df1 - df2)
+    abs_diff = abs(diff)
+    squared_diff = diff ** 2
+
+    mae_per_clade = abs_diff.mean(axis=1).to_dict()
+    mae_per_date = abs_diff.mean(axis=0).to_dict()
+    mae_overall = abs_diff.values.mean() if abs_diff.size > 0 else np.nan
+    
+    mae = {'mae_per_clade': mae_per_clade,
+            'mae_per_date': mae_per_date,
+            'mae_overall': mae_overall,
+    }
+
+    mse_per_clade = squared_diff.mean(axis=1).to_dict()
+    mse_per_date = squared_diff.mean(axis=0).to_dict()
+    mse_overall = squared_diff.values.mean() if squared_diff.size > 0 else np.nan
+    
+    mse = {'mse_per_clade': mse_per_clade,
+            'mse_per_date': mse_per_date,
+            'mse_overall': mse_overall,
+    }
+
+    return mae, mse
+
+def streamPlot(df: pd.DataFrame=None, clade_color_dict: dict = None, output: str = None, figsize=(24, 8), date_freq='M'):
+
+    plt.figure(figsize=figsize)
+    
+    # Initialize a variable to keep track of the maximum frequency value
+    max_freq_value = 0
+
+    # Set the title of the plot
+    plt.title('Clade Frequencies', fontsize=20)
+
+    df2 = df[['date', 'clade']].copy()
+    df2['date'] = pd.to_datetime(df2['date'], errors='coerce')
+    df2['date_freq'] = df2['date'].dt.to_period(date_freq)
+
+    # Group the data by month and lineage, calculate the frequency, and reshape the DataFrame
+    freq_by_date = df2.groupby(['date_freq', 'clade']).size().unstack(fill_value=0)
+    freq_by_date = freq_by_date.T/freq_by_date.sum(axis=1)
+    freq_by_date_percentage = freq_by_date.T * 100
+
+    # Update the maximum frequency value
+    max_freq_value = max(max_freq_value, freq_by_date_percentage.values.max())
+
+    # Extract the days for the x-axis
+    days = [str(month) for month in freq_by_date_percentage.index]
+
+    # Assign colors to each clade for plotting
+    clade_colors=[clade_color_dict[c] for c in freq_by_date_percentage.columns]
+
+
+    # Plot the data as a stacked area plot
+    lines = plt.stackplot(days, freq_by_date_percentage.T.values, labels=freq_by_date_percentage.columns, colors =clade_colors)
+    plt.xlabel('Date')
+    plt.xticks(rotation=45, ha='right')
+    plt.ylabel('Frequency (%)')
+    plt.legend(loc='lower center', bbox_to_anchor=(0.5, -0.3), ncol=len(set(df.clade)), fontsize='14')
+    plt.ylim(0, 100)
+
+    # Save the plot as a PDF file
+    plt.savefig(output, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    return freq_by_date
 
 def READ_METADATA(TSV_FILE: str = None) -> pd.DataFrame:
     """
@@ -223,7 +368,6 @@ def mer_split(sequence: Optional[str] = None,
         tokens.append(f"k{idx}_{km}")
         idx += 1
     return tokens
-
 
 def build_tfidf_vectorizer(
     fasta_dict: Dict[str, str],
@@ -1106,6 +1250,7 @@ def main():
     parser.add_argument("--METADATA", required=True, type=str, help="TSV metadata file that includes required columns 'name', 'date', 'region', and 'clade'")
     parser.add_argument("--output", required=False, type=str, help="Output file in FASTA format", default="subsampling.fasta")
     parser.add_argument("--keep_header", required=False, action="store_true", help="It will keep the fasta header as the same.")
+    parser.add_argument("--color_map", default="nipy_spectral", required=False, help="Check option in 'https://matplotlib.org/stable/users/explain/colors/colormaps.html'.")
     # Grupo de argumentos para a estratégia de subsampling
     sampling_group = parser.add_argument_group('Sampling Strategy')
     sampling_group.add_argument("--dedup", required=False, action="store_true", help="Remove duplicate sequences from subgroups considering the same period, clade, and region. " \
@@ -1186,6 +1331,22 @@ def main():
     METADATA.reset_index(inplace=True, drop=True)
     
     logging.info(f"Initial sample count: {initial_count}. After removing samples not in FASTA: {len(METADATA)}.")
+
+    logging.info(f"Defining clade colors according to {args.color_map} color map...")
+
+    # Extract unique clades present in the DataFrame
+    unique_clades = set(METADATA['clade'])
+
+    assert args.color_map in list(colormaps), f"{args.color_map} was not found in matplotlib colomaps. Check option in 'https://matplotlib.org/stable/users/explain/colors/colormaps.html'."
+
+    # Create a dictionary mapping each clade to a unique color using the Paired colormap
+    clade_color_dict = {clade: plt.get_cmap(args.color_map).colors[i] for i, clade in enumerate(unique_clades)}
+
+    logging.info("Calculating the clade frequence by dates for original Dataset...")
+    
+    original_freq_by_month = streamPlot(df=METADATA, clade_color_dict=clade_color_dict, output="original_clade_frequencies_by_date.pdf" , figsize=(24, 8))
+    
+    logging.info(f"{original_freq_by_month.mean(axis=1)}")
 
     # --- Agrupamento e Deduplicação (se solicitado) ---
     logging.info(f"Creating initial groups by date (frequency: {args.date_freq}) and clade...")
@@ -1275,12 +1436,36 @@ def main():
                 output_file.write(f">{name}\n{sequence}\n")    
             
             else:
-            
+                
                 clade = row["clade"]
                 region = row["region"]
                 date = row["date"].strftime("%Y-%m-%d")
                 output_file.write(f">{name}|{clade}|{region}|{date}\n{sequence}\n")
     
+    logging.info("Calculating the clade frequence by dates for subsampled Dataset...")    
+    
+    subsampling_freq_by_month = streamPlot(df=FINAL, clade_color_dict= clade_color_dict, output="subsampling_clade_frequencies_by_date.pdf" , figsize=(24, 8))
+    
+    logging.info(f"{subsampling_freq_by_month.mean(axis=1)}")
+
+    logging.info("Calculating mean absolute and mean squared errors...")    
+    mae, mse = error_calculate(df1= original_freq_by_month, df2= subsampling_freq_by_month)
+    
+    logging.info("Saving mean absolute error...")
+    
+    for k, v in tqdm(mae.items(), desc="Saving mean absolute error"):
+        save_dict2json(Dict=v, filename=f"{k}.json")
+
+    logging.info(f"mae overall {mae['mae_overall']}")
+
+    logging.info("Saving mean squared error...")
+
+    for k, v in tqdm(mse.items(), desc="Saving mean squared error"):
+        
+        save_dict2json(Dict=v, filename=f"{k}.json")
+    
+    logging.info(f"mse overall {mse['mse_overall']}")
+
     logging.info("Saving final FINAL_DATASET.tsv...")
     
     FINAL.to_csv("FINAL_DATASET.tsv", sep="\t", index=False)

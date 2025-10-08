@@ -14,12 +14,14 @@ from datetime import datetime
 
 import warnings
 from typing import Dict, List, Optional, Tuple, Union
-from collections import OrderedDict
-
+from collections import OrderedDict, Counter, defaultdict
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics import pairwise_distances
+
+# Use scipy to create a Compressed Sparse Row (CSR) matrix, which is highly efficient
+from scipy.sparse import csr_matrix
 
 from numpy.linalg import slogdet
 
@@ -332,7 +334,7 @@ def READ_FASTA(fasta_file: str,
 
 def mer_split(sequence: Optional[str] = None,
               kmer_size: int = 6,
-              overlap: int = 3) -> List[str]:
+              overlap: int = 3, kmer_idx=False) -> List[str]:
     """
     Generate k-mer tokens of the form 'k{index}_{kmer}' from a sequence.
 
@@ -365,9 +367,97 @@ def mer_split(sequence: Optional[str] = None,
     idx = 0
     for i in range(0, L - kmer_size + 1, step):
         km = seq[i:i + kmer_size]
-        tokens.append(f"k{idx}_{km}")
+        if kmer_idx:
+            tokens.append(f"k{idx}_{km}")
+        else:
+            tokens.append(f"{km}")
         idx += 1
     return tokens
+
+def create_bag_of_mutations(
+    fasta_dict: Dict[str, str], 
+    reference_sequence: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Creates a binary "Bag-of-Mutations" representation from a dictionary of aligned sequences.
+
+    Each sequence is converted into a binary vector where each feature represents a specific 
+    mutation relative to a reference sequence.
+
+    Parameters
+    ----------
+    fasta_dict : Dict[str, str]
+        A dictionary mapping sequence IDs to aligned sequences. All sequences must be of the same length.
+    reference_sequence : Optional[str], optional
+        The reference sequence to call mutations against. If None, the consensus sequence of the
+        provided fasta_dict is calculated and used as the reference. Defaults to None.
+
+    Returns
+    -------
+    pd.DataFrame
+        A pandas DataFrame where rows are sequence IDs, columns are mutations (e.g., 'A117G'),
+        and values are 1 or 0, indicating the presence or absence of the mutation.
+    
+    Raises
+    ------
+    ValueError
+        If the sequences in fasta_dict are not all of the same length.
+    """
+    if not fasta_dict:
+        return pd.DataFrame()
+
+    ids = list(fasta_dict.keys())
+    sequences = list(fasta_dict.values())
+    
+    # Validate that all sequences have the same length
+    seq_len = len(sequences[0])
+    if not all(len(s) == seq_len for s in sequences):
+        raise ValueError("All sequences in the alignment must have the same length.")
+
+    # --- Step 1: Determine the reference sequence (if not provided) ---
+    if reference_sequence is None:
+        #logging.info("No reference sequence provided, calculating consensus...")
+        consensus_chars = []
+        for i in range(seq_len):
+            #column = [seq[i] for seq in sequences if seq[i] != '-']
+            column = [seq[i] for seq in sequences]
+            if not column:
+                consensus_chars.append('-')  # Column with only gaps
+                continue
+            # Find the most common character (mode) for the column
+            most_common = Counter(column).most_common(1)[0][0]
+            consensus_chars.append(most_common)
+        reference_sequence = "".join(consensus_chars)
+        print(reference_sequence)
+        #logging.info("Consensus sequence calculated.")
+    
+    # --- Step 2: Identify all unique mutations (build the vocabulary) ---
+    all_mutations = set()
+    for seq in sequences:
+        for i in range(seq_len):
+            # A mutation is a difference from reference, but not a gap character in the query
+            if reference_sequence[i] != seq[i]:
+                mutation = f"{reference_sequence[i]}{i + 1}{seq[i]}" # Use 1-based indexing
+                all_mutations.add(mutation)
+    
+    vocabulary = sorted(list(all_mutations))
+    mutation_to_idx = {mutation: i for i, mutation in enumerate(vocabulary)}
+    
+    # --- Step 3: Create the binary matrix ---
+    n_sequences = len(sequences)
+    n_mutations = len(vocabulary)
+    bom_matrix = np.zeros((n_sequences, n_mutations), dtype=np.uint8)
+
+    for i, seq in enumerate(sequences):
+        for j in range(seq_len):
+            if reference_sequence[j] != seq[j] and seq[j] != '-':
+                mutation = f"{reference_sequence[j]}{j + 1}{seq[j]}"
+                if mutation in mutation_to_idx:
+                    k = mutation_to_idx[mutation]
+                    bom_matrix[i, k] = 1
+    
+    bom_df = pd.DataFrame(bom_matrix, index=ids, columns=vocabulary)
+    return bom_df
 
 def build_tfidf_vectorizer(
     fasta_dict: Dict[str, str],
@@ -376,6 +466,7 @@ def build_tfidf_vectorizer(
     min_df: Union[int, float] = 1,
     max_df: Union[int, float] = 1.0,
     preserve_ids: bool = True,
+    kmer_idx=False,
     return_sparse: bool = False,
     vectorizer_kwargs: Optional[Dict] = None,
     norm='l2'
@@ -432,7 +523,7 @@ def build_tfidf_vectorizer(
     sequences = [v for _, v in items]
 
     # Pre-tokenize
-    list_mers = [mer_split(sequence=s, kmer_size=kmer_size, overlap=overlap) for s in sequences]
+    list_mers = [mer_split(sequence=s, kmer_size=kmer_size, overlap=overlap, kmer_idx=kmer_idx) for s in sequences]
     corpus = [" ".join(tokens) for tokens in list_mers]
 
     empty_count = sum(1 for c in corpus if not c.strip())
@@ -577,31 +668,44 @@ def create_group_by(
     
     return nested, list_out
 
-def create_TFIDF_groups(list_of_groups: list = None, tfidf_dataframe = None):
+def create_TFIDF_groups(list_of_groups: list = None, vector_dataframe: pd.DataFrame = None) -> List[pd.DataFrame]:
+    """
+    Parameters
+    ----------
+    list_of_groups : list
+        The list of group tuples generated by `create_group_by`.
+    vector_dataframe : pd.DataFrame
+        The global DataFrame (sparse or dense) containing vectors for all sequences.
 
-    def create_TFIDF_group(names, tfidf_dataframe):
-        df = pd.DataFrame()
-        idx = {}
-        for i, name in enumerate(names):
-            tmp = tfidf_dataframe[tfidf_dataframe.index == name]
-            df = pd.concat([df, tmp], ignore_index=True)
-            idx[i] = name
-        return idx, df
+    Returns
+    -------
+    List[pd.DataFrame]
+        A list of DataFrames, where each DataFrame contains the vectors for a group.
+    """
+    
+    # Verificação para garantir que o índice está otimizado para busca.
+    # Se o índice não for único, a busca com .loc pode ser lenta.
+    if not vector_dataframe.index.is_unique:
+        warnings.warn("The vector DataFrame index is not unique. Performance of .loc may be degraded.")
 
-    list_idx = []
-    list_of_groups_tfidf = []
-    for i in tqdm(range(len(list_of_groups))):
-        idx, df_tfidf = create_TFIDF_group(names=list_of_groups[i][2]['name'].values, tfidf_dataframe=tfidf_dataframe)
+    list_of_groups_vectors = []
+    
+    for group_info in tqdm(list_of_groups, desc="Extracting group vectors"):
+        # group_info is a tuple: (date, clade, metadata_df, alloc)
+        group_metadata_df = group_info[2]
 
-        list_idx.append(idx)
-        list_of_groups_tfidf.append(df_tfidf)
+        names = group_metadata_df['name'].values
 
-    return list_idx, list_of_groups_tfidf
+        group_vectors_df = vector_dataframe.loc[names]
+        
+        list_of_groups_vectors.append(group_vectors_df)
+
+    return list_of_groups_vectors
 
 # -----------------------
 # util: Create distance Matrix (cosine is recomended to TF-IDF)
 # -----------------------
-def build_distance_matrix_from_tfidf(X, metric: str = "cosine", reduce_dim: Optional[int] = None, random_state: int = 0):
+def build_distance_matrix_from_tfidf(X, metric: str = "cosine", reduce_dim: Optional[int] = None, random_state: int = 42):
     """
     X : pd.DataFrame (dense) or scipy.sparse / ndarray
     metric: passed to sklearn.metrics.pairwise_distances
@@ -656,9 +760,8 @@ def diversity_score_from_indices(D: np.ndarray, indices: list, objective: str = 
         K = 1.0 - sub
         K = (K + K.T) / 2.0
         K = K + eps * np.eye(n)
-        sign, logdet = slogdet(K)   # funciona com scipy.linalg.slogdet ou numpy.linalg.slogdet (fallback)
+        sign, logdet = slogdet(K)
         if sign <= 0:
-            # indefinido numericamente — penaliza
             return -1e9
         return float(logdet)
     else:
@@ -678,7 +781,7 @@ def genetic_select_subset(
     mutation_rate: float = 0.25,
     tournament_size: int = 3,
     elitism: int = 2,
-    random_state: int = 0,
+    random_state: int = 42,
     verbose: bool = False
 ) -> Dict:
     """
@@ -793,7 +896,7 @@ def de_select_subset(
     generations: int = 200,
     F: float = 0.8,
     CR: float = 0.9,
-    random_state: int = 0,
+    random_state: int = 42,
     verbose: bool = False
 ) -> Dict:
     """
@@ -863,6 +966,7 @@ def maximize_diversity_indices(
     objective: str = "min",
     precompute_metric: str = "cosine",
     reduce_dim_before_distance: Optional[int] = None,
+    random_state: int = 42,
     **kwargs
 ) -> Dict:
     """
@@ -870,11 +974,11 @@ def maximize_diversity_indices(
     kwargs forwarded to genetic_select_subset or de_select_subset.
     Returns dict with best indices (integers) and optionally index labels if X is DataFrame.
     """
-    D, idx = build_distance_matrix_from_tfidf(X, metric=precompute_metric, reduce_dim=reduce_dim_before_distance)
+    D, idx = build_distance_matrix_from_tfidf(X, metric=precompute_metric, reduce_dim=reduce_dim_before_distance, random_state=random_state)
     if method == "ga":
-        res = genetic_select_subset(D, k=k, objective=objective, **kwargs)
+        res = genetic_select_subset(D, k=k, objective=objective, random_state=random_state, **kwargs)
     elif method == "de":
-        res = de_select_subset(D, k=k, objective=objective, **kwargs)
+        res = de_select_subset(D, k=k, objective=objective, random_state=random_state, **kwargs)
     else:
         raise ValueError("method must be 'ga' or 'de'")
     # attach original ids if X was DataFrame
@@ -1156,7 +1260,7 @@ def adaptive_pop_size(n, k, min_pop=10, max_pop=2000):
     pop_size = min(max_pop, max(min_pop, heuristic))
     return pop_size
 
-def run_hybrid_sampling(alloc_values: int, metadata_subgroup: pd.DataFrame) -> List[int]:
+def run_hybrid_sampling(alloc_values: int, metadata_subgroup: pd.DataFrame, random_state=42) -> List[int]:
     """
     Seleciona um subconjunto de índices de um DataFrame de metadados usando a abordagem híbrida.
 
@@ -1180,7 +1284,7 @@ def run_hybrid_sampling(alloc_values: int, metadata_subgroup: pd.DataFrame) -> L
 
     # Se os singletons já preenchem ou excedem a alocação, amostra aleatoriamente deles
     if len(df_singletons) >= alloc_values:
-        return df_singletons.sample(n=alloc_values, random_state=42).index.to_list()
+        return df_singletons.sample(n=alloc_values, random_state=random_state).index.to_list()
     
     # Caso principal: Pega todos os singletons e preenche o resto com os comuns
     else:
@@ -1190,7 +1294,7 @@ def run_hybrid_sampling(alloc_values: int, metadata_subgroup: pd.DataFrame) -> L
         singleton_indices = df_singletons.index.to_list()
         
         # Amostra aleatoriamente os índices dos comuns
-        common_indices_sample = df_common.sample(n=num_common_to_sample, random_state=42).index.to_list()
+        common_indices_sample = df_common.sample(n=num_common_to_sample, random_state=random_state).index.to_list()
         
         # Retorna a lista combinada de índices
         return singleton_indices + common_indices_sample
@@ -1271,6 +1375,9 @@ def main():
     vectorizer_group = parser.add_argument_group('Vectorizer Parameters')
     vectorizer_group.add_argument("--kmer_size", required=False, type=int, help="K-mer size for TF-IDF vectorization.", default=6)
     vectorizer_group.add_argument("--overlap", required=False, type=int, help="Overlap between k-mers.", default=3)
+    vectorizer_group.add_argument("--kmer_idx", required=False, action="store_true", help="It will create a positional k-mer information.")
+    vectorizer_group.add_argument("--use_TFIDF", required=False, action="store_true", help="Vectorizer sequences using TF-IDF method from k-mers.")
+    vectorizer_group.add_argument("--reference_name", required=False, type=str, help="It will be used only when not applied `use_TFIDF`.", default=None)
 
     # Grupo de argumentos para o Algoritmo Genético
     ga_group = parser.add_argument_group('Genetic Algorithm Parameters')
@@ -1372,11 +1479,23 @@ def main():
         logging.info(f"Recreated {len(list_of_groups)} groups.")
 
     # --- Vetorização TF-IDF ---
-    logging.info("Building TF-IDF vectorizer for all sequences...")
-    # Usamos o dicionário ALN original para construir o vetorizador para garantir consistência
-    TFIDF_VEC = build_tfidf_vectorizer(kmer_size=args.kmer_size, overlap=args.overlap, fasta_dict=ALN, norm='l2')
-    logging.info("Building TF-IDF representations for each group...")
-    _, list_of_groups_tfidf = create_TFIDF_groups(list_of_groups=list_of_groups, tfidf_dataframe=TFIDF_VEC)
+    if args.use_TFIDF:
+        logging.info("Building TF-IDF vectorizer for all sequences...")
+        # Usamos o dicionário ALN original para construir o vetorizador para garantir consistência
+        TFIDF_VEC = build_tfidf_vectorizer(kmer_size=args.kmer_size, overlap=args.overlap, fasta_dict=ALN, norm='l2', kmer_idx=args.kmer_idx)
+        logging.info("Building TF-IDF representations for each group...")
+        list_of_groups_tfidf = create_TFIDF_groups(list_of_groups=list_of_groups, vector_dataframe=TFIDF_VEC)
+    else:
+        logging.info("Building bag of mutations vectorizer for all sequences...")
+        if args.reference_name:
+            logging.info(f"The sequence named as {args.reference_name} will be used as reference sequence.")
+            reference_sequence = ALN[args.reference_name]
+            BOM_VEC = create_bag_of_mutations(fasta_dict=ALN, reference_sequence=reference_sequence)
+        else:
+            logging.info("No reference sequence was defined. Therefore, the consensus sequence will be considered as the reference.")
+            BOM_VEC = create_bag_of_mutations(fasta_dict=ALN, reference_sequence=None)
+            logging.info("Building bag of mutations representations for each group...")
+        list_of_groups_tfidf = create_TFIDF_groups(list_of_groups=list_of_groups, vector_dataframe=BOM_VEC)
     
     # --- Execução do Subsampling ---
     FINAL = pd.DataFrame()
@@ -1416,7 +1535,7 @@ def main():
                                             verbose=False,
                                             crossover_rate=args.crossover_rate)
             else:
-                indexes = run_hybrid_sampling(alloc_values=int(region_alloc), metadata_subgroup=region_meta_df)
+                indexes = run_hybrid_sampling(alloc_values=int(region_alloc), metadata_subgroup=region_meta_df, random_state=args.random_seed)
             
             tmp = region_meta_df.loc[indexes]
             FINAL = pd.concat([FINAL, tmp], ignore_index=True)
@@ -1436,7 +1555,7 @@ def main():
                 output_file.write(f">{name}\n{sequence}\n")    
             
             else:
-                
+
                 clade = row["clade"]
                 region = row["region"]
                 date = row["date"].strftime("%Y-%m-%d")

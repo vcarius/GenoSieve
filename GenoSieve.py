@@ -279,10 +279,27 @@ def REMOVE_REDUNDANCY(fasta_dict: Dict[str, str],
     non_redundant = {chosen_id: seq for seq, (chosen_id, _, _) in seq_index.items()}
     return non_redundant
 
+def REMOVE_AMBIGUOUS(fasta_dict: Dict[str, str], cutoff: float = 0.1):
+
+    ambiguous_bases = set("NRYWSKMBDHV")
+    
+    filtered_seqs = {}
+
+    for id_str, seq in fasta_dict.items():
+        seq_nogaps = seq.replace("-", "")
+        amb_count = sum(base in ambiguous_bases for base in seq_nogaps)
+        amb_count_p = amb_count/len(seq_nogaps)
+        if amb_count_p >= cutoff:
+            print(f"{id_str}: {amb_count} ambiguous bases ({amb_count_p:.2%})")
+            continue
+        else:
+            filtered_seqs[id_str] = seq
+    return filtered_seqs
 
 def READ_FASTA(fasta_file: str,
                non_redundant: bool = False,
                remove_gaps: bool = False,
+               remove_ambiguous: float = 0.1,
                date_format: str = "%Y-%m-%d",
                keep: str = "oldest") -> Dict[str, str]:
     """
@@ -324,12 +341,16 @@ def READ_FASTA(fasta_file: str,
             continue
 
         seq_dict[id_str] = seq
-
+    
+    if remove_ambiguous:
+        seq_dict = REMOVE_AMBIGUOUS(fasta_dict=seq_dict, cutoff = remove_ambiguous)
+    
     if non_redundant:
+        
         return REMOVE_REDUNDANCY(fasta_dict=seq_dict,
                                  date_format=date_format,
                                  keep=keep)
-
+    
     return seq_dict
 
 def mer_split(sequence: Optional[str] = None,

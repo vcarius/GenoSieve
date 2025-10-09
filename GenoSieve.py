@@ -567,7 +567,7 @@ def create_group_by(
     dropna: bool = True,
     min_group_size: int = 1,
     return_ordered: bool = True,
-) -> Tuple[Dict[pd.Timestamp, Dict[str, pd.DataFrame]], List[Tuple[pd.Timestamp, str, pd.DataFrame]]]:
+):
     """
     Group a DataFrame into (date_period -> clade -> DataFrame) and also return an
     ordered list of (date_period, clade, df_subset) for easy iteration.
@@ -1320,7 +1320,6 @@ def run_filter_sequences(alloc_values: int = None, tfidf_dataframe: pd.DataFrame
     
         # parameters
         k = alloc_values
-        random_state = 1991
         pop_size = adaptive_pop_size(n=len(tfidf_dataframe), k=k, min_pop=min_pop, max_pop=max_pop)
 
         # Running GA
@@ -1447,7 +1446,11 @@ def main():
     assert args.color_map in list(colormaps), f"{args.color_map} was not found in matplotlib colomaps. Check option in 'https://matplotlib.org/stable/users/explain/colors/colormaps.html'."
 
     # Create a dictionary mapping each clade to a unique color using the Paired colormap
-    clade_color_dict = {clade: plt.get_cmap(args.color_map).colors[i] for i, clade in enumerate(unique_clades)}
+    cmap = plt.get_cmap(args.color_map)
+    n = len(unique_clades)
+    clade_color_dict = {clade: cmap(i / max(1, n-1)) for i, clade in enumerate(unique_clades)}
+    
+    #clade_color_dict = {clade: plt.get_cmap(args.color_map).colors[i] for i, clade in enumerate(unique_clades)}
 
     logging.info("Calculating the clade frequence by dates for original Dataset...")
     

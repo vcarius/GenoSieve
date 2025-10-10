@@ -675,6 +675,7 @@ def create_group_by(
         W = clade_counts/len(df_date)
         #print(f"valor: {W}")
         clade_alloc = (W * (Target_N - N_clades)).round() + 1
+        print(f"Target: {Target_N} ---> Alloc: {clade_alloc} ")
 
         inner: Dict[str, pd.DataFrame] = OrderedDict() if return_ordered else {}
 
@@ -1483,7 +1484,7 @@ def main():
 
     # --- Agrupamento e Deduplicação (se solicitado) ---
     logging.info(f"Creating initial groups by date (frequency: {args.date_freq}) and clade...")
-    _, list_of_groups = create_group_by(METADATA, date_col='date', clade_col='clade', date_freq=args.date_freq)
+    _, list_of_groups = create_group_by(METADATA, Target_N=args.target_N, date_col='date', clade_col='clade', date_freq=args.date_freq)
     logging.info(f"Created {len(list_of_groups)} initial groups.")
 
     if args.dedup:

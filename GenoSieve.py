@@ -299,7 +299,8 @@ def REMOVE_AMBIGUOUS(fasta_dict: Dict[str, str], cutoff: float = 0.1):
 def READ_FASTA(fasta_file: str,
                non_redundant: bool = False,
                remove_gaps: bool = False,
-               remove_ambiguous: float = 0.1,
+               remove_ambiguous: bool = True,
+               cutoff_ambiguous: float = 0.1,
                date_format: str = "%Y-%m-%d",
                keep: str = "oldest") -> Dict[str, str]:
     """
@@ -343,10 +344,10 @@ def READ_FASTA(fasta_file: str,
         seq_dict[id_str] = seq
     
     if remove_ambiguous:
-        seq_dict = REMOVE_AMBIGUOUS(fasta_dict=seq_dict, cutoff = remove_ambiguous)
+        seq_dict = REMOVE_AMBIGUOUS(fasta_dict=seq_dict, cutoff = cutoff_ambiguous)
     
     if non_redundant:
-        
+
         return REMOVE_REDUNDANCY(fasta_dict=seq_dict,
                                  date_format=date_format,
                                  keep=keep)
@@ -1375,6 +1376,7 @@ def main():
     parser.add_argument("--output", required=False, type=str, help="Output file in FASTA format", default="subsampling.fasta")
     parser.add_argument("--keep_header", required=False, action="store_true", help="It will keep the fasta header as the same.")
     parser.add_argument("--color_map", default="nipy_spectral", required=False, help="Check option in 'https://matplotlib.org/stable/users/explain/colors/colormaps.html'.")
+    parser.add_argument("--cutoff_ambiguous", default=0.1, type=float, required=False, help="Cutoff of ambiguous bases permited. Accept values from 0 up to 1.")
     # Grupo de argumentos para a estratégia de subsampling
     sampling_group = parser.add_argument_group('Sampling Strategy')
     sampling_group.add_argument("--dedup", required=False, action="store_true", help="Remove duplicate sequences from subgroups considering the same period, clade, and region. " \
@@ -1448,7 +1450,7 @@ def main():
     logging.info(f"Reading metadata from {args.METADATA}...")
     METADATA = READ_METADATA(args.METADATA)
     logging.info(f"Reading sequences from {args.FASTA_ALN}...")
-    ALN = READ_FASTA(fasta_file=args.FASTA_ALN)
+    ALN = READ_FASTA(fasta_file=args.FASTA_ALN, remove_ambiguous=True, cutoff_ambiguous=args.cutoff_ambiguous)
 
     logging.info("Merging metadata and sequences...")
     METADATA['sequence'] = METADATA['name'].map(ALN)
